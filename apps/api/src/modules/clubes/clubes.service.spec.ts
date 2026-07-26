@@ -1,7 +1,8 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { PapelClube } from '@prisma/client';
+import { PapelClube, SeloCodigo } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SelosService } from '../selos/selos.service';
 import { ClubesService } from './clubes.service';
 
 type ArgsComData = { data: Record<string, unknown> };
@@ -32,12 +33,18 @@ function criarPrismaMock() {
 describe('ClubesService', () => {
   let service: ClubesService;
   let prisma: ReturnType<typeof criarPrismaMock>;
+  let selosService: { conceder: jest.Mock };
 
   beforeEach(async () => {
     prisma = criarPrismaMock();
+    selosService = { conceder: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
-      providers: [ClubesService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        ClubesService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: SelosService, useValue: selosService },
+      ],
     }).compile();
 
     service = moduleRef.get(ClubesService);
@@ -99,6 +106,20 @@ describe('ClubesService', () => {
       await expect(service.confirmarVinculoAtleta('clube-1', 'v1')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+      expect(selosService.conceder).not.toHaveBeenCalled();
+    });
+
+    it('concede o selo VINCULO_CLUBE_CONFIRMADO ao confirmar (LAP-046)', async () => {
+      prisma.vinculoAtletaClube.findUnique.mockResolvedValue({
+        id: 'v1',
+        clubeId: 'clube-1',
+        atletaId: 'atleta-1',
+      });
+      prisma.vinculoAtletaClube.update.mockResolvedValue({ id: 'v1', confirmadoPeloClube: true });
+
+      await service.confirmarVinculoAtleta('clube-1', 'v1');
+
+      expect(selosService.conceder).toHaveBeenCalledWith('atleta-1', SeloCodigo.VINCULO_CLUBE_CONFIRMADO);
     });
   });
 });

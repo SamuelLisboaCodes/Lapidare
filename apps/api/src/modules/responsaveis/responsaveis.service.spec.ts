@@ -1,8 +1,9 @@
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { StatusVinculoResponsavel } from '@prisma/client';
+import { SeloCodigo, StatusVinculoResponsavel } from '@prisma/client';
 import { AtletasService } from '../atletas/atletas.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SelosService } from '../selos/selos.service';
 import { ResponsaveisService } from './responsaveis.service';
 
 function criarPrismaMock() {
@@ -22,16 +23,19 @@ describe('ResponsaveisService', () => {
   let service: ResponsaveisService;
   let prisma: ReturnType<typeof criarPrismaMock>;
   let atletasService: { recalcularVisibilidade: jest.Mock };
+  let selosService: { conceder: jest.Mock };
 
   beforeEach(async () => {
     prisma = criarPrismaMock();
     atletasService = { recalcularVisibilidade: jest.fn() };
+    selosService = { conceder: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         ResponsaveisService,
         { provide: PrismaService, useValue: prisma },
         { provide: AtletasService, useValue: atletasService },
+        { provide: SelosService, useValue: selosService },
       ],
     }).compile();
 
@@ -61,6 +65,7 @@ describe('ResponsaveisService', () => {
         }),
       );
       expect(atletasService.recalcularVisibilidade).toHaveBeenCalledWith('atleta-1');
+      expect(selosService.conceder).toHaveBeenCalledWith('atleta-1', SeloCodigo.RESPONSAVEL_VALIDADO);
     });
 
     it('rejeita aprovar um vínculo que não pertence ao responsável autenticado', async () => {

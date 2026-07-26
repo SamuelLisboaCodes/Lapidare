@@ -10,12 +10,46 @@ import {
   StatusVinculoResponsavel,
   StatusVisibilidadeAtleta,
 } from '@prisma/client';
+import {
+  CAMPOS_OPCIONAIS_COMPLETUDE,
+  contarCamposPreenchidos,
+} from '../../common/atleta-completude';
 import { garantirPerfilUnico } from '../../common/perfil-unico.helper';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SelosService } from '../selos/selos.service';
+import { BuscarAtletasDto } from './dto/buscar-atletas.dto';
 import { CreateAtletaDto } from './dto/create-atleta.dto';
 import { SolicitarVinculoClubeDto } from './dto/solicitar-vinculo-clube.dto';
 import { SolicitarVinculoDto } from './dto/solicitar-vinculo.dto';
 import { UpdateAtletaDto } from './dto/update-atleta.dto';
+
+const TOTAL_SELOS_POSSIVEIS = 4;
+
+/**
+ * Score heurístico de ranking (RN-06 / ADR 0005) — calculado em memória
+ * após o findMany, não em SQL cru (ver nota de implementação na ADR 0005).
+ * Inclui completude, selos (LAP-046) e recência.
+ */
+function calcularScoreRanking(atleta: {
+  alturaCm: number | null;
+  envergaduraCm: number | null;
+  alcanceAtaqueCm: number | null;
+  alcanceBloqueioCm: number | null;
+  bio: string | null;
+  criadoEm: Date;
+  _count: { midias: number; selos: number };
+}): number {
+  const camposPreenchidos = contarCamposPreenchidos(atleta);
+  const temMidia = atleta._count.midias > 0 ? 1 : 0;
+  const completude = (camposPreenchidos + temMidia) / (CAMPOS_OPCIONAIS_COMPLETUDE.length + 1);
+
+  const selosNormalizados = Math.min(atleta._count.selos / TOTAL_SELOS_POSSIVEIS, 1);
+
+  const diasDesdeCriacao = (Date.now() - atleta.criadoEm.getTime()) / (1000 * 60 * 60 * 24);
+  const recencia = 1 / (1 + Math.max(0, diasDesdeCriacao));
+
+  return 0.5 * completude + 0.2 * selosNormalizados + 0.3 * recencia;
+}
 
 function calcularIdade(dataNascimento: Date): number {
   const hoje = new Date();
@@ -29,7 +63,10 @@ function calcularIdade(dataNascimento: Date): number {
 
 @Injectable()
 export class AtletasService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly selosService: SelosService,
+  ) {}
 
   async criarPerfil(usuarioId: string, dto: CreateAtletaDto) {
     await garantirPerfilUnico(this.prisma, usuarioId);
@@ -42,7 +79,7 @@ export class AtletasService {
       statusAnterior: undefined,
     });
 
-    return this.prisma.atletaPerfil.create({
+    const atleta = await this.prisma.atletaPerfil.create({
       data: {
         usuarioId,
         nome: dto.nome,
@@ -60,6 +97,10 @@ export class AtletasService {
         statusVisibilidade,
       },
     });
+
+    await this.selosService.avaliarPerfil(atleta.id);
+
+    return atleta;
   }
 
   async buscarPerfilProprio(usuarioId: string) {
@@ -82,7 +123,7 @@ export class AtletasService {
       statusAnterior: atleta.statusVisibilidade,
     });
 
-    return this.prisma.atletaPerfil.update({
+    const atualizado = await this.prisma.atletaPerfil.update({
       where: { id: atleta.id },
       data: {
         ...dto,
@@ -90,6 +131,10 @@ export class AtletasService {
         statusVisibilidade,
       },
     });
+
+    await this.selosService.avaliarPerfil(atleta.id);
+
+    return atualizado;
   }
 
   async buscarPorId(id: string, requisitanteUsuarioId: string) {
@@ -176,6 +221,66 @@ export class AtletasService {
   async listarVinculosClube(usuarioId: string) {
     const atleta = await this.buscarPerfilProprio(usuarioId);
     return this.prisma.vinculoAtletaClube.findMany({ where: { atletaId: atleta.id } });
+  }
+
+  async seguirClube(usuarioId: string, clubeId: string) {
+    const atleta = await this.buscarPerfilProprio(usuarioId);
+
+    const clube = await this.prisma.clube.findUnique({ where: { id: clubeId } });
+    if (!clube) throw new NotFoundException('Clube não encontrado.');
+
+    const jaSegue = await this.prisma.seguidorClube.findUnique({
+      where: { atletaId_clubeId: { atletaId: atleta.id, clubeId } },
+    });
+    if (jaSegue) throw new ConflictException('Você já segue esse clube.');
+
+    return this.prisma.seguidorClube.create({ data: { atletaId: atleta.id, clubeId } });
+  }
+
+  async deixarDeSeguir(usuarioId: string, clubeId: string) {
+    const atleta = await this.buscarPerfilProprio(usuarioId);
+
+    const seguindo = await this.prisma.seguidorClube.findUnique({
+      where: { atletaId_clubeId: { atletaId: atleta.id, clubeId } },
+    });
+    if (!seguindo) throw new NotFoundException('Você não segue esse clube.');
+
+    await this.prisma.seguidorClube.delete({ where: { id: seguindo.id } });
+  }
+
+  async listarClubesSeguidos(usuarioId: string) {
+    const atleta = await this.buscarPerfilProprio(usuarioId);
+    return this.prisma.seguidorClube.findMany({ where: { atletaId: atleta.id }, include: { clube: true } });
+  }
+
+  async buscar(filtros: BuscarAtletasDto) {
+    const candidatos = await this.prisma.atletaPerfil.findMany({
+      where: {
+        statusVisibilidade: StatusVisibilidadeAtleta.VISIVEL,
+        posicao: filtros.posicao,
+        categoria: filtros.categoria,
+        cidade: filtros.cidade,
+        estado: filtros.estado,
+      },
+      include: { _count: { select: { midias: true, selos: true } } },
+    });
+
+    return candidatos
+      .map((atleta) => ({ ...atleta, _score: calcularScoreRanking(atleta) }))
+      .sort((a, b) => b._score - a._score);
+  }
+
+  async listarCandidaturas(usuarioId: string) {
+    const atleta = await this.buscarPerfilProprio(usuarioId);
+    return this.prisma.candidaturaPeneira.findMany({
+      where: { atletaId: atleta.id },
+      include: { peneira: true },
+    });
+  }
+
+  async listarSelos(usuarioId: string) {
+    const atleta = await this.buscarPerfilProprio(usuarioId);
+    return this.selosService.listarPorAtleta(atleta.id);
   }
 
   async recalcularVisibilidade(atletaId: string) {

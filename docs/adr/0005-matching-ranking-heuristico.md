@@ -29,3 +29,21 @@ aprendemos o que de fato importa.
 - Reavaliar ML real (ranking treinado com dados de cliques/matches) apenas
   quando houver volume de interação suficiente **e** evidência concreta de
   que a heurística está deixando valor na mesa — não antes de V2.
+
+## Nota de implementação (Bloco 4, 2026-07-26)
+Na prática, o score é calculado em **código da aplicação** após um
+`findMany` do Prisma com os filtros como `WHERE` (`AtletasService.buscar`),
+não em `ORDER BY` de SQL cru. Motivo: o volume do MVP (dezenas de atletas)
+torna ordenar em memória com custo desprezível, e evita `$queryRaw` do
+Prisma (perde type-safety para ganhar uma otimização que não é gargalo
+neste volume). O espírito da decisão (a) — fórmula simples de pesos, sem
+serviço separado, sem ML — continua o mesmo; só a mecânica mudou. Ainda
+sem o termo de "selos" no score (depende de LAP-046, não implementado).
+Reavaliar mover para SQL se o volume crescer a ponto de ordenar em memória
+virar gargalo real — não antes disso.
+
+## Nota de implementação 2 (LAP-046, 2026-07-26)
+Selos implementados (`SelosModule`) — o score agora é
+`0.5 * completude + 0.2 * (selos/4) + 0.3 * recência` (pesos
+redistribuídos para abrir espaço ao termo de selos). Fecha a pendência
+registrada na nota anterior.

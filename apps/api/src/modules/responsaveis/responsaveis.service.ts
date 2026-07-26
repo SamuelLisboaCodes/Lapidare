@@ -1,8 +1,9 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { StatusVinculoResponsavel } from '@prisma/client';
+import { SeloCodigo, StatusVinculoResponsavel } from '@prisma/client';
 import { AtletasService } from '../atletas/atletas.service';
 import { garantirPerfilUnico } from '../../common/perfil-unico.helper';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SelosService } from '../selos/selos.service';
 import { CreateResponsavelDto } from './dto/create-responsavel.dto';
 import { TERMOS_VERSAO_ATUAL } from './termos.constants';
 
@@ -11,6 +12,7 @@ export class ResponsaveisService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly atletasService: AtletasService,
+    private readonly selosService: SelosService,
   ) {}
 
   async criarPerfil(usuarioId: string, dto: CreateResponsavelDto) {
@@ -47,6 +49,7 @@ export class ResponsaveisService {
     });
 
     await this.atletasService.recalcularVisibilidade(vinculo.atletaId);
+    await this.selosService.conceder(vinculo.atletaId, SeloCodigo.RESPONSAVEL_VALIDADO);
     return this.prisma.vinculoResponsavelAtleta.findUnique({ where: { id: vinculo.id } });
   }
 

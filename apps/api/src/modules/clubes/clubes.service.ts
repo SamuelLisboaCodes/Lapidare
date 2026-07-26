@@ -1,13 +1,17 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { PapelClube, StatusVinculoClube } from '@prisma/client';
+import { PapelClube, SeloCodigo, StatusVinculoClube } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AtualizarVerificacaoDto } from '../../common/dto/atualizar-verificacao.dto';
+import { SelosService } from '../selos/selos.service';
 import { ConvidarMembroDto } from './dto/convidar-membro.dto';
 import { CreateClubeDto } from './dto/create-clube.dto';
 
 @Injectable()
 export class ClubesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly selosService: SelosService,
+  ) {}
 
   criarClube(usuarioId: string, dto: CreateClubeDto) {
     return this.prisma.$transaction(async (tx) => {
@@ -74,9 +78,13 @@ export class ClubesService {
       throw new NotFoundException('Vínculo não encontrado neste clube.');
     }
 
-    return this.prisma.vinculoAtletaClube.update({
+    const atualizado = await this.prisma.vinculoAtletaClube.update({
       where: { id: vinculoId },
       data: { confirmadoPeloClube: true },
     });
+
+    await this.selosService.conceder(vinculo.atletaId, SeloCodigo.VINCULO_CLUBE_CONFIRMADO);
+
+    return atualizado;
   }
 }
