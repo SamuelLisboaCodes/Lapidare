@@ -1,0 +1,474 @@
+// Schema inicial derivado de docs/03-modelo-dominio.md.
+// Rascunho de partida para o Bloco 0 do backlog (docs/05-backlog-mvp.md) —
+// espera-se refinamento (índices, defaults, constraints adicionais) ao
+// implementar cada módulo.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identidade e acesso
+// ---------------------------------------------------------------------------
+
+model Usuario {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  senhaHash     String?
+  oauthProvider String?
+  telefone      String?
+  ativo         Boolean   @default(true)
+  criadoEm      DateTime  @default(now())
+
+  atletaPerfil      AtletaPerfil?
+  responsavelPerfil ResponsavelPerfil?
+  empresarioPerfil  EmpresarioPerfil?
+  patrocinadorPerfil PatrocinadorPerfil?
+  membrosClube      MembroClube[]
+  mensagens         Mensagem[]
+  notificacoes      Notificacao[]
+  denunciasFeitas   Denuncia[]
+}
+
+// ---------------------------------------------------------------------------
+// Atleta e responsável (núcleo de LGPD/menores — docs/04-seguranca-lgpd.md)
+// ---------------------------------------------------------------------------
+
+enum PosicaoVolei {
+  PONTEIRO
+  LEVANTADOR
+  CENTRAL
+  LIBERO
+  OPOSTO
+}
+
+enum CategoriaAtleta {
+  SUB13
+  SUB15
+  SUB17
+  SUB19
+  ADULTO
+}
+
+enum StatusVisibilidadeAtleta {
+  PENDENTE_APROVACAO
+  VISIVEL
+  OCULTO
+}
+
+model AtletaPerfil {
+  id                 String                   @id @default(uuid())
+  usuarioId          String                   @unique
+  usuario            Usuario                  @relation(fields: [usuarioId], references: [id])
+  nome               String
+  dataNascimento     DateTime
+  sexo               String
+  cidade             String
+  estado             String
+  alturaCm           Int?
+  envergaduraCm      Int?
+  alcanceAtaqueCm    Int?
+  alcanceBloqueioCm  Int?
+  posicao            PosicaoVolei
+  categoria          CategoriaAtleta
+  bio                String?
+  statusVisibilidade StatusVisibilidadeAtleta @default(PENDENTE_APROVACAO)
+  criadoEm           DateTime                 @default(now())
+
+  vinculosResponsavel VinculoResponsavelAtleta[]
+  vinculosClube       VinculoAtletaClube[]
+  seguindoClubes      SeguidorClube[]
+  midias              Midia[]
+  selos               AtletaSelo[]
+  candidaturas        CandidaturaPeneira[]
+  interesses          Interesse[]
+  matches             Match[]
+}
+
+model ResponsavelPerfil {
+  id        String  @id @default(uuid())
+  usuarioId String  @unique
+  usuario   Usuario @relation(fields: [usuarioId], references: [id])
+  nome      String
+  cpf       String  @unique
+  telefone  String
+
+  vinculosAtleta VinculoResponsavelAtleta[]
+}
+
+enum TipoRelacaoResponsavel {
+  PAI
+  MAE
+  TUTOR_LEGAL
+}
+
+enum StatusVinculoResponsavel {
+  PENDENTE
+  APROVADO
+  REVOGADO
+}
+
+model VinculoResponsavelAtleta {
+  id            String                   @id @default(uuid())
+  responsavelId String
+  responsavel   ResponsavelPerfil        @relation(fields: [responsavelId], references: [id])
+  atletaId      String
+  atleta        AtletaPerfil             @relation(fields: [atletaId], references: [id])
+  status        StatusVinculoResponsavel @default(PENDENTE)
+  tipoRelacao   TipoRelacaoResponsavel
+
+  // Auditoria de consentimento — docs/04-seguranca-lgpd.md §4
+  versaoTermoAceito   String?
+  ipAprovacao         String?
+  userAgentAprovacao  String?
+
+  solicitadoEm DateTime  @default(now())
+  respondidoEm DateTime?
+
+  @@index([atletaId])
+}
+
+// ---------------------------------------------------------------------------
+// Empresário e Patrocinador
+// ---------------------------------------------------------------------------
+
+enum StatusVerificacaoConta {
+  PENDENTE
+  APROVADO
+  REJEITADO
+}
+
+model EmpresarioPerfil {
+  id                String                  @id @default(uuid())
+  usuarioId         String                  @unique
+  usuario           Usuario                 @relation(fields: [usuarioId], references: [id])
+  nome              String
+  documento         String
+  representa        String?
+  statusVerificacao StatusVerificacaoConta  @default(PENDENTE)
+
+  interesses  Interesse[]
+  matches     Match[]
+  assinaturas Assinatura[]
+}
+
+model PatrocinadorPerfil {
+  id                String                 @id @default(uuid())
+  usuarioId         String                 @unique
+  usuario           Usuario                @relation(fields: [usuarioId], references: [id])
+  razaoSocial       String
+  cnpj              String                 @unique
+  statusVerificacao StatusVerificacaoConta @default(PENDENTE)
+
+  interesses  Interesse[]
+  matches     Match[]
+  assinaturas Assinatura[]
+}
+
+// ---------------------------------------------------------------------------
+// Clube e RBAC multi-usuário (RN-04, ADR 0008)
+// ---------------------------------------------------------------------------
+
+model Clube {
+  id                String                 @id @default(uuid())
+  nomeFantasia      String
+  documento         String?
+  cidade            String
+  estado            String
+  statusVerificacao StatusVerificacaoConta @default(PENDENTE)
+  criadoEm          DateTime               @default(now())
+
+  membros      MembroClube[]
+  vinculos     VinculoAtletaClube[]
+  seguidores   SeguidorClube[]
+  peneiras     Peneira[]
+  interesses   Interesse[]
+  matches      Match[]
+  assinaturas  Assinatura[]
+}
+
+enum PapelClube {
+  ADMIN
+  MEMBRO
+}
+
+model MembroClube {
+  id          String     @id @default(uuid())
+  usuarioId   String
+  usuario     Usuario    @relation(fields: [usuarioId], references: [id])
+  clubeId     String
+  clube       Clube      @relation(fields: [clubeId], references: [id])
+  papel       PapelClube @default(MEMBRO)
+  ativo       Boolean    @default(true)
+  convidadoEm DateTime   @default(now())
+
+  @@unique([usuarioId, clubeId])
+}
+
+enum TipoVinculoClube {
+  ESCOLA_BASE
+  SELECAO
+  CLUBE_BASE_PROFISSIONAL
+}
+
+enum StatusVinculoClube {
+  ATIVO
+  ENCERRADO
+}
+
+model VinculoAtletaClube {
+  id                   String             @id @default(uuid())
+  atletaId             String
+  atleta               AtletaPerfil       @relation(fields: [atletaId], references: [id])
+  clubeId              String
+  clube                Clube              @relation(fields: [clubeId], references: [id])
+  tipoVinculo          TipoVinculoClube
+  status               StatusVinculoClube @default(ATIVO)
+  dataInicio           DateTime           @default(now())
+  dataFim              DateTime?
+  confirmadoPeloClube  Boolean            @default(false)
+
+  @@index([atletaId])
+  @@index([clubeId])
+}
+
+// ---------------------------------------------------------------------------
+// Peneiras, candidaturas e descoberta (RN-08)
+// ---------------------------------------------------------------------------
+
+enum StatusPeneira {
+  ABERTA
+  ENCERRADA
+}
+
+model Peneira {
+  id           String        @id @default(uuid())
+  clubeId      String
+  clube        Clube         @relation(fields: [clubeId], references: [id])
+  titulo       String
+  categoria    CategoriaAtleta
+  posicaoAlvo  PosicaoVolei?
+  dataEvento   DateTime
+  local        String
+  descricao    String?
+  status       StatusPeneira @default(ABERTA)
+  criadoEm     DateTime      @default(now())
+
+  candidaturas CandidaturaPeneira[]
+}
+
+enum StatusCandidaturaPeneira {
+  INTERESSADO
+  EM_AVALIACAO
+  APROVADO
+  REPROVADO
+}
+
+model CandidaturaPeneira {
+  id        String                   @id @default(uuid())
+  peneiraId String
+  peneira   Peneira                  @relation(fields: [peneiraId], references: [id])
+  atletaId  String
+  atleta    AtletaPerfil             @relation(fields: [atletaId], references: [id])
+  status    StatusCandidaturaPeneira @default(INTERESSADO)
+  criadoEm  DateTime                 @default(now())
+
+  @@unique([peneiraId, atletaId])
+}
+
+model SeguidorClube {
+  id       String       @id @default(uuid())
+  atletaId String
+  atleta   AtletaPerfil @relation(fields: [atletaId], references: [id])
+  clubeId  String
+  clube    Clube        @relation(fields: [clubeId], references: [id])
+  criadoEm DateTime     @default(now())
+
+  @@unique([atletaId, clubeId])
+}
+
+model Notificacao {
+  id           String   @id @default(uuid())
+  usuarioId    String
+  usuario      Usuario  @relation(fields: [usuarioId], references: [id])
+  tipo         String
+  referenciaId String?
+  lida         Boolean  @default(false)
+  criadoEm     DateTime @default(now())
+
+  @@index([usuarioId])
+}
+
+// ---------------------------------------------------------------------------
+// Interesse, match e conversa
+//
+// Ator polimórfico (Clube | Empresario | Patrocinador) resolvido via 3 FKs
+// nullable, conforme ADR 0003 — o CHECK constraint garantindo exatamente
+// uma FK não-nula é adicionado via migration SQL manual, não é expressável
+// diretamente no schema do Prisma.
+// ---------------------------------------------------------------------------
+
+enum DirecaoInteresse {
+  ATOR_PARA_ATLETA
+  ATLETA_PARA_ATOR
+}
+
+model Interesse {
+  id                 String              @id @default(uuid())
+  atletaId           String
+  atleta             AtletaPerfil        @relation(fields: [atletaId], references: [id])
+  clubeId            String?
+  clube              Clube?              @relation(fields: [clubeId], references: [id])
+  empresarioId       String?
+  empresario         EmpresarioPerfil?   @relation(fields: [empresarioId], references: [id])
+  patrocinadorId     String?
+  patrocinador       PatrocinadorPerfil? @relation(fields: [patrocinadorId], references: [id])
+  direcao            DirecaoInteresse
+  criadoEm           DateTime            @default(now())
+}
+
+model Match {
+  id             String              @id @default(uuid())
+  atletaId       String
+  atleta         AtletaPerfil        @relation(fields: [atletaId], references: [id])
+  clubeId        String?
+  clube          Clube?              @relation(fields: [clubeId], references: [id])
+  empresarioId   String?
+  empresario     EmpresarioPerfil?   @relation(fields: [empresarioId], references: [id])
+  patrocinadorId String?
+  patrocinador   PatrocinadorPerfil? @relation(fields: [patrocinadorId], references: [id])
+  criadoEm       DateTime            @default(now())
+
+  conversa Conversa?
+}
+
+model Conversa {
+  id       String   @id @default(uuid())
+  matchId  String   @unique
+  match    Match    @relation(fields: [matchId], references: [id])
+  criadoEm DateTime @default(now())
+
+  mensagens Mensagem[]
+}
+
+model Mensagem {
+  id         String   @id @default(uuid())
+  conversaId String
+  conversa   Conversa @relation(fields: [conversaId], references: [id])
+  autorId    String
+  autor      Usuario  @relation(fields: [autorId], references: [id])
+  conteudo   String
+  criadoEm   DateTime @default(now())
+
+  @@index([conversaId])
+}
+
+// ---------------------------------------------------------------------------
+// Mídia, selos e gamificação
+// ---------------------------------------------------------------------------
+
+enum StatusModeracaoMidia {
+  PENDENTE
+  APROVADA
+  REJEITADA
+}
+
+model Midia {
+  id               String                @id @default(uuid())
+  atletaId         String
+  atleta           AtletaPerfil          @relation(fields: [atletaId], references: [id])
+  tipo             String                @default("VIDEO")
+  url              String
+  descricao        String?
+  statusModeracao  StatusModeracaoMidia  @default(PENDENTE)
+  criadoEm         DateTime              @default(now())
+
+  @@index([atletaId])
+}
+
+enum SeloCodigo {
+  PERFIL_COMPLETO
+  VIDEO_ENVIADO
+  VINCULO_CLUBE_CONFIRMADO
+  RESPONSAVEL_VALIDADO
+}
+
+model Selo {
+  id        String     @id @default(uuid())
+  codigo    SeloCodigo @unique
+  nome      String
+  descricao String?
+
+  atletas AtletaSelo[]
+}
+
+model AtletaSelo {
+  atletaId    String
+  atleta      AtletaPerfil @relation(fields: [atletaId], references: [id])
+  seloId      String
+  selo        Selo         @relation(fields: [seloId], references: [id])
+  concedidoEm DateTime     @default(now())
+
+  @@id([atletaId, seloId])
+}
+
+// ---------------------------------------------------------------------------
+// Monetização (Bloco 6 do backlog — sem cobrança real no MVP-piloto)
+// ---------------------------------------------------------------------------
+
+enum PlanoAssinatura {
+  GRATIS
+  PREMIUM
+}
+
+enum StatusAssinatura {
+  ATIVA
+  CANCELADA
+  EXPIRADA
+}
+
+model Assinatura {
+  id             String            @id @default(uuid())
+  clubeId        String?
+  clube          Clube?            @relation(fields: [clubeId], references: [id])
+  empresarioId   String?
+  empresario     EmpresarioPerfil? @relation(fields: [empresarioId], references: [id])
+  patrocinadorId String?
+  patrocinador   PatrocinadorPerfil? @relation(fields: [patrocinadorId], references: [id])
+  plano          PlanoAssinatura   @default(GRATIS)
+  status         StatusAssinatura  @default(ATIVA)
+  criadoEm       DateTime          @default(now())
+  expiraEm       DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// Moderação e denúncias (docs/04-seguranca-lgpd.md §7)
+// ---------------------------------------------------------------------------
+
+enum TipoEntidadeDenuncia {
+  PERFIL
+  MIDIA
+  MENSAGEM
+}
+
+enum StatusDenuncia {
+  ABERTA
+  EM_ANALISE
+  RESOLVIDA
+}
+
+model Denuncia {
+  id                String                @id @default(uuid())
+  denuncianteId     String
+  denunciante       Usuario               @relation(fields: [denuncianteId], references: [id])
+  entidadeTipo      TipoEntidadeDenuncia
+  entidadeId        String
+  motivo            String
+  status            StatusDenuncia        @default(ABERTA)
+  criadoEm          DateTime              @default(now())
+}
